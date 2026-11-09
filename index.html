@@ -284,23 +284,52 @@ const saveDrafts=()=>ls.set('iq-drafts',drafts);
 /* ---------- storage ---------- */
 let pT;
 function saveProfile(){
+  if(S.spec)return;
   clearTimeout(pT);pT=setTimeout(()=>{
     if(db)db.doc('profile/main').set(S.profile).catch(fail);else ls.set('iq-profile',S.profile)},500);
 }
 const fail=()=>toast("Couldn't save that. Check your connection and try again.");
 function putDoc(col,id,data){
+  if(S.spec)return;
   const arr=col==='sessions'?S.sessions:S.acts,i=arr.findIndex(x=>x.id===id);
   if(i<0)arr.unshift({...data,id});else arr[i]={...data,id};
   if(db)return db.collection(col).doc(id).set(data).catch(fail);
   ls.set('iq-'+col,arr);
 }
 function delDoc(col,id){
+  if(S.spec)return;
   const k=col==='sessions'?'sessions':'acts';S[k]=S[k].filter(x=>x.id!==id);
   if(db)db.collection(col).doc(id).delete().catch(fail);else ls.set('iq-'+col,S[k]);
   render();
 }
 function applyProfile(p){if(!p)return;S.profile={week:Math.min(8,Math.max(1,p.week||5)),orm:{...DEF_ORM,...(p.orm||{})},loads:{...(p.loads||{})}}}
+const nowD=()=>S.spec?new Date(S.spec.at):new Date();
+const SPEC_Q=(()=>{try{return new URLSearchParams(location.search).get('p')}catch(e){return null}})();
+const b64u=u=>{let b='';for(let i=0;i<u.length;i+=8192)b+=String.fromCharCode.apply(null,u.subarray(i,i+8192));return btoa(b).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')};
+const ub64=t=>Uint8Array.from(atob(t.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
+async function pack(o){const raw=new TextEncoder().encode(JSON.stringify(o));
+  if(window.CompressionStream){try{const z=new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer());return 'z'+b64u(z)}catch(e){}}
+  return 'j'+b64u(raw)}
+async function unpack(t){const u=ub64(t.slice(1));
+  const bytes=t[0]==='z'?new Uint8Array(await new Response(new Blob([u]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer()):u;
+  return JSON.parse(new TextDecoder().decode(bytes))}
+async function shareProgress(){
+  const strip=o=>{const c={...o};delete c.src;return c};
+  const data={app:'prog-yal',v:1,at:new Date().toISOString(),profile:{week:S.profile.week,orm:S.profile.orm},sessions:S.sessions,activities:S.acts.map(strip)};
+  let code=await pack(data);
+  if(code.length>60000){data.sessions=S.sessions.slice().sort((a,b)=>a.date<b.date?1:-1).slice(0,150);data.activities=data.activities.sort((a,b)=>a.date<b.date?1:-1).slice(0,150);code=await pack(data)}
+  const url=location.origin+location.pathname+'?p='+code;
+  try{if(navigator.share){await navigator.share({title:'Ma progression Prog YaL',text:'Ma progression Prog YaL',url});return}}catch(e){if(e&&e.name==='AbortError')return}
+  try{await navigator.clipboard.writeText(url);toast('Lien copié. Colle-le dans un message.');return}catch(e){}
+  $('win').innerHTML=`<div class="panel"><h2>Lien de partage</h2><p class="small dim">Copie ce lien et envoie-le.</p><textarea readonly style="width:100%;height:120px;background:var(--panel2);color:var(--fg);border:1px solid var(--line)">${esc(url)}</textarea><button class="btn" data-act="winx">Fermer</button></div>`;$('win').hidden=false;
+}
 async function boot(){
+  if(SPEC_Q){
+    try{const d=await unpack(SPEC_Q);if(!d||d.app!=='prog-yal')throw 0;
+      S.spec={at:d.at};applyProfile(d.profile);S.sessions=d.sessions||[];S.acts=d.activities||[];S.mode='spec';
+      document.title='Progression · Prog YaL';if(!['body','stats','garmin'].includes(location.hash.slice(1)))history.replaceState(null,'',location.pathname+location.search+'#body');
+    }catch(e){S.specBad=true}
+    render();return}
   render();
   try{db=window.claude&&window.claude.use?await window.claude.use('db'):null}catch(e){db=null}
   if(!db){applyProfile(ls.get('iq-profile',null));S.sessions=ls.get('iq-sessions',[]);S.acts=ls.get('iq-activities',[]);S.mode='local';render();return}
@@ -339,21 +368,25 @@ const hitsBonus=e=>BONUS.includes(e.mm.P[0]);
 
 /* ---------- views ---------- */
 const $=id=>document.getElementById(id);
-function tab(){const h=location.hash.slice(1);return ['quests','body','stats','garmin'].includes(h)?h:'quests'}
+function tab(){const h=location.hash.slice(1);if(S.spec)return ['body','stats','garmin'].includes(h)?h:'body';return ['quests','body','stats','garmin'].includes(h)?h:'quests'}
 function render(){
   const xp=totalXP(),L=lvlOf(xp),a=lvlAt(L),b=lvlAt(L+1),c=CYCLE[S.profile.week-1];
+  if(S.specBad){$('hud').innerHTML='';$('view').innerHTML=`<section class="panel"><h2>Lien illisible</h2><p>Ce lien de progression est incomplet ou abîmé. Demande à la personne de le renvoyer.</p><p><a href="./">Ouvrir l'app</a></p></section>`;return}
   $('hud').innerHTML=`<div class="lvl" title="Level ${L}">${L}</div>
    <div class="who"><b>Loïc</b><span class="title">${TITLES[Math.min(L,TITLES.length)-1]}</span>
     <div class="bar" title="XP"><i style="width:${Math.round((xp-a)/(b-a)*100)}%"></i></div>
     <div class="small dim num">${fmt(xp)} / ${fmt(b)} XP</div></div>
-   <div class="week"><button class="ib" data-act="wk" data-d="-1" aria-label="Previous cycle week">‹</button>
+   ${S.spec?`<div class="week"><div class="lab"><b>Week ${S.profile.week} / 8</b><span>${c.ph}</span></div></div>
+   <div class="note" style="flex-basis:100%"><b style="color:var(--fg)">Lecture seule.</b> Progression de Loïc au ${new Date(S.spec.at).toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'})}. <a href="./">Ouvrir ma propre app</a></div>`:`<div class="week"><button class="ib" data-act="wk" data-d="-1" aria-label="Previous cycle week">‹</button>
     <div class="lab"><b>Week ${S.profile.week} / 8</b><span>${c.ph}</span></div>
     <button class="ib" data-act="wk" data-d="1" aria-label="Next cycle week">›</button>
-    <button class="ib" data-act="snd" aria-label="Sound ${sound?'on':'off'}" title="Sound ${sound?'on':'off'}">${sound?'♪':'×'}</button></div>`;
+    <button class="ib" data-act="snd" aria-label="Sound ${sound?'on':'off'}" title="Sound ${sound?'on':'off'}">${sound?'♪':'×'}</button>
+    <button class="ib" data-act="share" aria-label="Partager ma progression" title="Partager ma progression">⤴</button></div>`}`;
+  const q=document.querySelector('#tabs a[href="#quests"]');if(q)q.hidden=!!S.spec;
   const t=tab();document.querySelectorAll('#tabs a').forEach(a=>a.classList.toggle('on',a.hash==='#'+t));
   $('view').innerHTML=({quests:vQuests,body:vBody,stats:vStats,garmin:vGarmin})[t]();
 }
-function weekDone(){const mo=monday(new Date());return new Set(S.sessions.filter(s=>monday(s.date)===mo).map(s=>s.day))}
+function weekDone(){const mo=monday(nowD());return new Set(S.sessions.filter(s=>monday(s.date)===mo).map(s=>s.day))}
 
 function vQuests(){
   const w=S.profile.week,c=CYCLE[w-1],day=DAYS[S.day],done=weekDone();
@@ -398,7 +431,7 @@ function vQuests(){
 }
 
 function muscleSets(days){
-  const since=Date.now()-days*864e5,t={};
+  const since=+nowD()-days*864e5,t={};
   S.sessions.filter(s=>+new Date(s.date)>=since).forEach(s=>(s.ex||[]).forEach(x=>{const e=EX[x.id];if(!e)return;const n=x.s.length;
     e.mm.P.forEach(k=>t[k]=(t[k]||0)+n);e.mm.S.forEach(k=>t[k]=(t[k]||0)+n*.5)}));
   return t;
@@ -437,8 +470,8 @@ function trophies(){
 function vStats(){
   const w=S.profile.week,T=trophies(),main=['squat','bench','deadlift','press','pullup'];
   const hist=S.sessions.slice().sort((a,b)=>a.date<b.date?1:-1).slice(0,30);
-  return `<section class="panel"><h2>Records (1RM)</h2><p class="small dim" style="margin:0 0 10px">Every load in your quests is calculated from these. Beat one in a quest and it updates itself.</p>
-   <div class="prs">${Object.keys(LIFTS).map(k=>`<div class="pr"><label for="orm-${k}">${LIFTS[k]}</label><input id="orm-${k}" class="num" type="number" inputmode="decimal" step="2.5" min="0" data-orm="${k}" value="${S.profile.orm[k]}"></div>`).join('')}</div></section>
+  return `<section class="panel"><h2>Records (1RM)</h2>${S.spec?'':'<p class="small dim" style="margin:0 0 10px">Every load in your quests is calculated from these. Beat one in a quest and it updates itself.</p>'}
+   <div class="prs">${Object.keys(LIFTS).map(k=>`<div class="pr"><label for="orm-${k}">${LIFTS[k]}</label><input id="orm-${k}" class="num" type="number" inputmode="decimal" step="2.5" min="0" data-orm="${k}" value="${S.profile.orm[k]}"${S.spec?' readonly':''}></div>`).join('')}</div></section>
   <section class="panel"><h2>Cycle roadmap</h2><div class="scroll"><table><thead><tr><th>Week</th><th>Phase</th><th>Sets × reps</th><th>%</th>${main.map(k=>`<th>${LIFTS[k].replace(' (added)','')}</th>`).join('')}</tr></thead><tbody>
    ${CYCLE.map((c,i)=>`<tr class="${i+1===w?'cur':''}"><td>W${i+1}</td><td style="font-family:var(--body)">${c.ph}</td><td>${i===7?'Build-up × 1':c.s+' × '+c.r}</td><td>${Math.round(c.p*100)}</td>${main.map(k=>`<td>${fmt(liftLoad(k,i+1))}</td>`).join('')}</tr>`).join('')}
    <tr><td colspan="4" style="font-family:var(--body)">Record attempt in week 8</td>${main.map(k=>`<td style="color:var(--gold)">${fmt(mr(S.profile.orm[k])+STEP)}</td>`).join('')}</tr></tbody></table></div></section>
@@ -448,16 +481,17 @@ function vStats(){
     const g=S.acts.find(a=>a.kind==='LIFT'&&ymd(a.date)===ymd(s.date));
     return `<div class="row"><div class="l"><b>D${s.day+1} ${DAYS[s.day].n}</b> <span class="tag">W${s.week}</span>${s.pr&&s.pr.length?' <span class="tag gold">Record</span>':''}
      <div>${new Date(s.date).toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'})} · ${s.sets} sets · ${fmt(s.vol)} kg${g&&g.avgHr?` · Garmin: ${g.avgHr} bpm avg${g.cal?', '+g.cal+' kcal':''}`:''}</div></div>
-     <div class="r num">+${s.xp} XP<button class="x" data-act="del" data-col="sessions" data-id="${esc(s.id)}">Delete</button></div></div>`}).join('')}</div>`
+     <div class="r num">+${s.xp} XP${S.spec?'':`<button class="x" data-act="del" data-col="sessions" data-id="${esc(s.id)}">Delete</button>`}</div></div>`}).join('')}</div>`
    :'<p class="dim">Nothing banked yet. Tick some sets in Quests and press Complete quest.</p>'}</section>
+  ${S.spec?'':`<section class="panel"><h2>Share</h2><p class="small dim" style="margin:0 0 10px">Send a read-only link with your level, quests, records, body map and Garmin activities as they are right now. Send a new link to show later progress.</p><button class="btn" data-act="share">Partager ma progression</button></section>
   <section class="panel"><h2>Backup</h2><p class="small dim" style="margin:0 0 10px">Everything is saved on this phone only. Save a backup file now and then, and before changing phone. Restoring adds the backup's quests and activities to what is already here and takes its records and cycle week.</p>
-   <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn alt" data-act="export">Save a backup</button><label class="btn alt" style="cursor:pointer">Restore a backup<input id="restore" type="file" accept=".json,application/json" hidden></label></div></section>`;
+   <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn alt" data-act="export">Save a backup</button><label class="btn alt" style="cursor:pointer">Restore a backup<input id="restore" type="file" accept=".json,application/json" hidden></label></div></section>`}`;
 }
 
 function vGarmin(){
-  const mo=monday(new Date()),wk=S.acts.filter(a=>monday(a.date)===mo),sum=(k)=>wk.reduce((a,x)=>a+(x[k]||0),0);
+  const mo=monday(nowD()),wk=S.acts.filter(a=>monday(a.date)===mo),sum=(k)=>wk.reduce((a,x)=>a+(x[k]||0),0);
   const list=S.acts.slice().sort((a,b)=>a.date<b.date?1:-1).slice(0,60);
-  return `<div class="cols two"><div class="exs">
+  return `<div class="cols two">${S.spec?'':`<div class="exs">
    <section class="panel"><h2>Import from your Forerunner 265</h2>
     <ol class="steps"><li>Let the watch sync to Garmin Connect as usual.</li><li>Open Garmin Connect in a browser, go to Activities, All Activities, then Export CSV (top right).</li><li>Drop the file below. Re-importing the same file never creates duplicates.</li></ol>
     <label class="drop" id="drop" style="display:block"><b>Drop Activities.csv here</b> or tap to choose it<input id="csv" type="file" accept=".csv,text/csv" hidden></label></section>
@@ -465,13 +499,13 @@ function vGarmin(){
     <form class="form" id="manual"><label>Type<select id="m-kind"><option>RUN</option><option>BIKE</option><option>SWIM</option><option>WALK</option><option>LIFT</option><option>MOVE</option></select></label>
      <label>Date<input id="m-date" type="date" value="${ymd(new Date())}" required></label><label>Minutes<input id="m-min" type="number" min="1" inputmode="numeric" required></label>
      <label>Km<input id="m-km" type="number" step="0.01" min="0" inputmode="decimal"></label><label>Avg HR<input id="m-hr" type="number" min="30" max="230" inputmode="numeric"></label>
-     <label>kcal<input id="m-cal" type="number" min="0" inputmode="numeric"></label><button class="btn alt" type="submit">Add</button></form></section></div>
+     <label>kcal<input id="m-cal" type="number" min="0" inputmode="numeric"></label><button class="btn alt" type="submit">Add</button></form></section></div>`}
   <div class="exs">
    <section class="panel"><h2>This week on the watch</h2>${wk.length?`<div class="tiles"><div class="tile"><b class="num">${wk.length}</b><span>Activities</span></div><div class="tile"><b class="num">${fmt(sum('durS')/3600)} h</b><span>Time</span></div><div class="tile"><b class="num">${fmt(sum('distKm'))}</b><span>Km</span></div><div class="tile"><b class="num">${fmt(sum('cal'))}</b><span>kcal</span></div></div>`
     :'<p class="dim" style="margin:0">No activities this week yet. Each one is worth 1 XP per minute, up to 120.</p>'}</section>
    <section class="panel"><h2>Activity log</h2>${list.length?`<div class="rows">${list.map(a=>`<div class="row"><div class="l"><span class="tag cy">${esc(a.kind)}</span> <b>${esc(a.title||a.type||a.kind)}</b>
      <div>${new Date(a.date).toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'})} · ${mmss(a.durS||0)}${a.distKm?' · '+fmt(a.distKm)+' km':''}${a.avgHr?' · '+a.avgHr+' bpm avg':''}${a.maxHr?' / '+a.maxHr+' max':''}${a.cal?' · '+a.cal+' kcal':''}${a.te?' · TE '+a.te:''}</div></div>
-     <div class="r num">+${actXP(a)} XP<button class="x" data-act="del" data-col="activities" data-id="${esc(a.id)}">Delete</button></div></div>`).join('')}</div>`
+     <div class="r num">+${actXP(a)} XP${S.spec?'':`<button class="x" data-act="del" data-col="activities" data-id="${esc(a.id)}">Delete</button>`}</div></div>`).join('')}</div>`
     :'<p class="dim" style="margin:0">Runs, rides and strength sessions from your watch will show up here. Strength sessions also attach their heart rate to the matching quest in Stats.</p>'}</section></div></div>`;
 }
 
@@ -545,6 +579,8 @@ document.addEventListener('click',ev=>{
   const mu=ev.target.closest('[data-mu]');
   if(mu){S.muscle=S.muscle===mu.dataset.mu?null:mu.dataset.mu;return render()}
   const b=ev.target.closest('[data-act]');if(!b)return;const a=b.dataset.act,e=EX[b.dataset.ex];
+  if(a==='share')return shareProgress();
+  if(S.spec&&!['sel','snd','winx'].includes(a))return;
   if(a==='wk'){S.profile.week=Math.min(8,Math.max(1,S.profile.week+ +b.dataset.d));saveProfile();render()}
   else if(a==='snd'){sound=!sound;ls.set('iq-sound',sound);render();beep()}
   else if(a==='day'){S.day=+b.dataset.i;S.sel=null;S.muscle=null;ls.set('iq-day',S.day);render()}
@@ -563,6 +599,7 @@ document.addEventListener('click',ev=>{
 });
 document.addEventListener('change',ev=>{
   const t=ev.target;
+  if(S.spec)return;
   if(t.dataset.orm){const v=parseFloat(t.value);if(v>0){S.profile.orm[t.dataset.orm]=v;saveProfile();render();toast('Record saved. Quest loads updated.')}}
   if(t.id==='csv'&&t.files[0])t.files[0].text().then(importCSV);
   if(t.id==='restore'&&t.files[0])t.files[0].text().then(restoreBackup);
