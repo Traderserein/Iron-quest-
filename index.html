@@ -74,7 +74,9 @@ main{padding-block:18px 150px;display:grid;gap:18px}
 .btn{border:0;background:var(--hit);color:#1a0612;font:700 .95rem var(--display);text-transform:uppercase;letter-spacing:.08em;padding:13px 20px;clip-path:var(--cut)}
 .btn:hover{filter:brightness(1.1)} .btn.alt{background:var(--panel2);color:var(--fg)} .btn.sm{padding:8px 12px;font-size:.78rem}
 .tag{display:inline-block;font:600 .68rem var(--display);text-transform:uppercase;letter-spacing:.1em;padding:2px 7px;clip-path:polygon(4px 0,100% 0,calc(100% - 4px) 100%,0 100%);background:var(--panel2);color:var(--dim);white-space:nowrap}
-.tag.boss{background:var(--hit);color:#1a0612} .tag.gold{background:var(--gold);color:#2a1d00} .tag.cy{background:var(--xp);color:#04262a}
+.tag.boss{background:var(--hit);color:#1a0612} .tag.gold{background:var(--gold);color:#2a1d00} .tag.cy{background:var(--xp);color:#04262a} .tag.up{background:var(--ok);color:#06301a}
+.prev{font-size:.8rem;color:var(--dim);margin:-4px 0 10px;display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center}
+.prog{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line);font-size:.9rem;text-align:left}
 
 /* day chips */
 .days{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}
@@ -160,7 +162,7 @@ ol.steps{margin:0 0 12px;padding-left:20px} ol.steps li{margin:4px 0}
 .pop{position:fixed;z-index:21;pointer-events:none;font:700 1.1rem var(--display);color:var(--gold);animation:pop .9s ease-out forwards}
 @keyframes pop{to{transform:translateY(-46px);opacity:0}}
 #win{position:fixed;inset:0;z-index:30;background:rgba(10,8,22,.88);display:grid;place-items:center;padding:16px}
-#win .panel{max-width:440px;width:100%;text-align:center;border-color:var(--gold);animation:in .35s ease-out}
+#win .panel{max-width:440px;width:100%;max-height:calc(100dvh - 32px);overflow-y:auto;text-align:center;border-color:var(--gold);animation:in .35s ease-out}
 @keyframes in{from{transform:scale(.9);opacity:0}}
 #win h1{font-size:1.9rem;color:var(--gold);text-transform:uppercase;letter-spacing:.08em}
 #win .tiles{margin:14px 0;text-align:left}
@@ -366,6 +368,17 @@ const heatOf=list=>{const h={};list.forEach(e=>{e.mm.P.forEach(k=>h[k]=1);e.mm.S
 const names=a=>a.map(k=>MUS[k]).join(', ');
 const hitsBonus=e=>BONUS.includes(e.mm.P[0]);
 
+/* ---------- progress vs last time ---------- */
+function lastFor(id){let best=null;S.sessions.forEach(s=>{const x=(s.ex||[]).find(x=>x.id===id);if(x&&(!best||s.date>best.s.date))best={s,x}});return best}
+const topOf=sets=>{const w=Math.max(...sets.map(s=>s[0]));return {w,r:Math.max(...sets.filter(s=>s[0]===w).map(s=>s[1])),reps:sets.reduce((a,s)=>a+s[1],0),n:sets.length}};
+function diffOf(prev,cur,e){
+  const u=e.unit===' m'?' m':' reps',dw=+(cur.w-prev.w).toFixed(2);
+  if(dw)return {t:(dw>0?'+':'−')+fmt(Math.abs(dw))+' kg',up:dw>0};
+  const dr=cur.reps-prev.reps;if(dr)return {t:(dr>0?'+':'−')+Math.abs(dr)+u,up:dr>0};
+  return {t:'Same as last time',up:null};
+}
+const setsTxt=(t,e)=>`${t.n} × ${t.r}${e.unit||''}${t.w?' @ '+fmt(t.w)+' kg':''}`;
+
 /* ---------- views ---------- */
 const $=id=>document.getElementById(id);
 function tab(){const h=location.hash.slice(1);if(S.spec)return ['body','stats','garmin'].includes(h)?h:'body';return ['quests','body','stats','garmin'].includes(h)?h:'quests'}
@@ -386,7 +399,7 @@ function render(){
   const t=tab();document.querySelectorAll('#tabs a').forEach(a=>a.classList.toggle('on',a.hash==='#'+t));
   $('view').innerHTML=({quests:vQuests,body:vBody,stats:vStats,garmin:vGarmin})[t]();
 }
-function weekDone(){const mo=monday(nowD());return new Set(S.sessions.filter(s=>monday(s.date)===mo).map(s=>s.day))}
+function weekDone(){const w=S.profile.week,t=+nowD();return new Set(S.sessions.filter(s=>s.week===w&&t-new Date(s.date)<42*864e5).map(s=>s.day))}
 
 function vQuests(){
   const w=S.profile.week,c=CYCLE[w-1],day=DAYS[S.day],done=weekDone();
@@ -408,7 +421,9 @@ function vQuests(){
     return `<div class="ex${S.sel===e.id?' sel':''}${dn===sets.length?' clear':''}">
      <div class="exh"><button class="exn" data-act="sel" data-ex="${e.id}" title="Show muscles on the map">${e.name}</button>
       <span>${p.boss?'<span class="tag boss">Boss</span> ':''}${e.kind==='light'?'<span class="tag">Light</span> ':''}${bz?'<span class="tag gold">Bonus ×1.5</span>':''}</span></div>
-     <div class="meta">${metas}</div>
+     <div class="meta">${metas}</div>${(()=>{const L=lastFor(e.id);if(!L)return '';
+      const prev=topOf(L.x.s),tk=sets.filter(s=>s.d),cur=topOf((tk.length?tk:sets).map(s=>[s.w,s.r])),d=diffOf(prev,cur,e);
+      return `<div class="prev"><span>Last time (W${L.s.week}, ${new Date(L.s.date).toLocaleDateString('en-GB',{day:'numeric',month:'short'})}): <b class="num" style="color:var(--fg)">${setsTxt(prev,e)}</b></span><span class="tag${d.up?' up':''}">${d.t}</span></div>`})()}
      <div class="sets">${sets.map((s,i)=>`<button class="set${s.d?' done':''}" data-act="set" data-ex="${e.id}" data-i="${i}" aria-pressed="${!!s.d}" aria-label="Set ${i+1}: ${s.w} kg for ${s.r}"><b>${s.w?fmt(s.w):'BW'}</b><span>${s.d?'✓ ':'× '}${s.r}${u}</span></button>`).join('')}</div>
      <div class="adj"><span class="g"><button class="ib" data-act="adj" data-ex="${e.id}" data-k="w" data-d="-${STEP}" aria-label="Less weight">−</button>kg<button class="ib" data-act="adj" data-ex="${e.id}" data-k="w" data-d="${STEP}" aria-label="More weight">+</button></span>
       <span class="g"><button class="ib" data-act="adj" data-ex="${e.id}" data-k="r" data-d="-1" aria-label="Fewer reps">−</button>reps<button class="ib" data-act="adj" data-ex="${e.id}" data-k="r" data-d="1" aria-label="More reps">+</button></span>
@@ -558,7 +573,8 @@ function finish(){
     if(e.kind==='acc')S.profile.loads[e.id]=dn[dn.length-1].w;
     if(['cycle','cap3'].includes(e.kind)){const top=Math.max(...dn.map(s=>s.w));if(top>S.profile.orm[e.lift]){pr.push({lift:e.lift,from:S.profile.orm[e.lift],to:top});S.profile.orm[e.lift]=top}}});
   if(!sets)return toast('Tick at least one set first.');
-  xp+=100+pr.length*250;const before=lvlOf(totalXP()),had=new Set(trophies().list.filter(t=>t[2]).map(t=>t[0]));
+  const prog=ex.map(x=>{const e=EX[x.id],L=lastFor(x.id);if(!L)return null;const p=topOf(L.x.s),c=topOf(x.s);return {e,p,c,d:diffOf(p,c,e)}}).filter(Boolean),ups=prog.filter(g=>g.d.up).length;
+  xp+=100+pr.length*250+ups*25;const before=lvlOf(totalXP()),had=new Set(trophies().list.filter(t=>t[2]).map(t=>t[0]));
   const now=new Date(),id='s-'+now.toISOString().replace(/\D/g,'').slice(0,14);
   putDoc('sessions',id,{date:now.toISOString(),week:w,day:S.day,sets,vol:Math.round(vol),xp,pr,ex});
   saveProfile();delete drafts[dkey()];saveDrafts();rest=null;$('rest').hidden=true;S.sel=null;
@@ -567,6 +583,7 @@ function finish(){
   $('win').innerHTML=`<div class="panel" role="dialog" aria-modal="true" aria-label="Quest cleared"><h1>${pr.length?'New record!':'Quest cleared'}</h1>
    <p class="dim" style="margin:6px 0 0">D${S.day+1} ${day.n}, week ${w}</p>
    <div class="tiles"><div class="tile"><b class="num">+${xp}</b><span>XP</span></div><div class="tile"><b class="num">${sets}</b><span>Sets</span></div><div class="tile"><b class="num">${fmt(Math.round(vol))}</b><span>kg moved</span></div></div>
+   ${prog.length?`<div style="margin:6px 0 12px"><h2 style="margin-bottom:6px">${ups?`Progress: ${ups} lift${ups>1?'s':''} up (+${ups*25} XP)`:'Compared with last time'}</h2>${prog.map(g=>`<div class="prog"><span>${g.e.name}<br><span class="small dim num">${setsTxt(g.p,g.e)} → ${setsTxt(g.c,g.e)}</span></span><span><span class="tag${g.d.up?' up':''}">${g.d.t}</span></span></div>`).join('')}</div>`:''}
    ${pr.map(p=>`<p><span class="tag gold">Record</span> ${LIFTS[p.lift]}: <b class="num">${fmt(p.from)} → ${fmt(p.to)} kg</b></p>`).join('')}
    ${after>before?`<p><span class="tag boss">Level up</span> You are now level <b class="num">${after}</b>, ${TITLES[Math.min(after,TITLES.length)-1]}.</p>`:''}
    ${fresh.map(n=>`<p><span class="tag gold">Trophy</span> ${n}</p>`).join('')}
